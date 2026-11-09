@@ -8,11 +8,15 @@
       {
         "title": "Client review",
         "layout": "record",
-        "sql": "select name,owner,review_due,security_evidence,retention_days from clients where id=$1"
+        "sql": "select name,owner,review_due,coalesce(nullif(security_evidence,''),'Not recorded') security_evidence,coalesce(retention_days::text,'Not recorded') retention_days from clients where id=$1"
       },
       {
-        "title": "Recorded backup and restore evidence",
-        "sql": "select code,name,device,state,last_result,last_success,restore_state,last_restore,restore_due from v_morning where client_id=$1 order by code"
+        "title": "Recorded backup results",
+        "sql": "select code,name,state,to_char(last_result,'YYYY-MM-DD HH24:MI') last_result_utc,to_char(last_success,'YYYY-MM-DD HH24:MI') last_success_utc from v_morning where client_id=$1 order by code"
+      },
+      {
+        "title": "Restore exercise position",
+        "sql": "select code,name,restore_state,to_char(last_restore,'YYYY-MM-DD HH24:MI') last_restore_utc,to_char(restore_due,'YYYY-MM-DD HH24:MI') restore_due_utc from v_morning where client_id=$1 order by code"
       },
       {
         "title": "Follow-up work",
