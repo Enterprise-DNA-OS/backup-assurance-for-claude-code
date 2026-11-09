@@ -1,0 +1,36 @@
+{
+  "exported_at": "2026-11-08T12:00:00Z",
+  "pages": [
+    {
+      "data": [
+        {
+          "device_id": null,
+          "br_device_id": "demo-backup-001",
+          "client": {
+            "name": null,
+            "br_company_name": "Example export client (synthetic)",
+            "client_id": null
+          },
+          "device_name": null,
+          "br_device_name": "EXPORT-FS01",
+          "br_job_name": "Nightly file backup",
+          "br_backup_classification": "Primary Backup",
+          "last_result": [
+            {
+              "status": "success",
+              "date": "2026-11-08T02:00:00Z"
+            }
+          ],
+          "history": [
+            {
+              "date": "2026-11-08T00:00:00Z",
+              "sla_status": "In Compliance"
+            }
+          ]
+        }
+      ],
+      "total_count": 1,
+      "next_cursor": null
+    }
+  ]
+}

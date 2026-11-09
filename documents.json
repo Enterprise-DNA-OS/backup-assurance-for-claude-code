@@ -1,11 +1,40 @@
 [
   {
-    "name": "example",
-    "title": "TODO(author): the first document this industry must produce",
-    "for_each": "select gen_random_uuid() as id, 'Example' as name",
-    "file": "name",
+    "name": "backup-review",
+    "title": "Backup assurance review",
+    "for_each": "select id,code,name from clients order by code",
+    "file": "code",
     "sections": [
-      { "title": "Details", "sql": "select 'replace me' as item, $1::text as record_id" }
+      {
+        "title": "Client review",
+        "layout": "record",
+        "sql": "select name,owner,review_due,security_evidence,retention_days from clients where id=$1"
+      },
+      {
+        "title": "Recorded backup and restore evidence",
+        "sql": "select code,name,device,state,last_result,last_success,restore_state,last_restore,restore_due from v_morning where client_id=$1 order by code"
+      },
+      {
+        "title": "Follow-up work",
+        "sql": "select a.code,a.name,a.owner,a.due_on,a.status,a.evidence from actions a join jobs j on j.id=a.job_id where j.client_id=$1 order by a.due_on"
+      }
+    ]
+  },
+  {
+    "name": "restore-record",
+    "title": "Restore exercise record",
+    "for_each": "select id,code,name from jobs order by code",
+    "file": "code",
+    "sections": [
+      {
+        "title": "Agreed policy",
+        "layout": "record",
+        "sql": "select code,name,device,owner,rpo_hours,restore_days,policy_evidence from jobs where id=$1"
+      },
+      {
+        "title": "Exercises recorded",
+        "sql": "select tested_at,outcome,recovery_minutes,evidence,actor from restore_tests where job_id=$1 order by tested_at desc"
+      }
     ]
   }
 ]

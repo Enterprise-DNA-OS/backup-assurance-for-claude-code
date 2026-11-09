@@ -1,0 +1,77 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { getDb, REPO_ROOT } from './lib/db.mjs';
+import { migrate } from './migrate.mjs';
+import { seed } from './seed.mjs';
+import { run } from './assurance.mjs';
+const tmp=fs.mkdtempSync(path.join(os.tmpdir(),'backup-assurance-'));
+// Only an explicitly supplied disposable test database can select PostgreSQL.
+process.env.DATABASE_URL=process.env.TEST_DATABASE_URL||'';
+process.env.DATA_DIR=path.join(tmp,'db');process.env.OUTPUT_DIR=tmp;
+const db=await getDb();let checks=0;
+const ok=(x)=>{assert.ok(x);checks++;};
+const eq=(a,b)=>{assert.deepEqual(a,b);checks++;};
+const cmd=(name,opts={})=>run(db,[...name.split(' '),...Object.entries(opts).map(([k,v])=>v===true?`--${k}`:`--${k}=${v}`)]);
+const rejects=async(fn,re)=>{await assert.rejects(fn,re);checks++;};
+const file=(name,obj)=>{const f=path.join(tmp,name);fs.writeFileSync(f,JSON.stringify(obj));return f;};
+try{
+ if(db.mode==='postgres'){const rows=await db.query("select tablename from pg_tables where schemaname='public'");assert.equal(rows.length,0,'TEST_DATABASE_URL must point to an empty disposable database');}
+ eq((await migrate(db)).ran.length,1);eq((await migrate(db)).ran.length,0);await seed(db);await seed(db);
+ eq((await cmd('clients')).length,2);eq((await cmd('jobs')).length,4);
+ const h=await cmd('morning-check');eq(Object.fromEntries(h.map(r=>[r.code,r.state])),{'C-ARCHIVE':'unconfigured','C-ERP':'failure','H-DESIGN':'stale-results','H-FILES':'current-success'});
+ eq((await cmd('missing-results')).map(r=>r.code),['C-ARCHIVE','H-DESIGN']);eq((await cmd('restore-due')).length,3);eq((await cmd('client-health')).map(r=>r.jobs),[2,2]);
+ eq((await cmd('history',{job:'h-files'})).results.length,1);ok((await cmd('attention')).some(r=>r.reason==='action-overdue'));
+ const rules=await cmd('compliance');for(const rule of ['BACKUP-01','RESTORE-02','SECURITY-03','RETENTION-04'])ok(rules.some(r=>r.rule===rule));
+ eq((await cmd('weekly-review')).backups.length,4);eq((await cmd('actions')).length,2);eq((await cmd('audit')).length,0);eq((await cmd('imports')).length,0);
+ await rejects(()=>cmd('add-client',{code:'TEST',name:'Test',owner:'Ana'}),/actor/);
+ const actor='Test operator';const c=await cmd('add-client',{code:'TEST',name:'Harbour Design (demo)',owner:'Ana',actor});
+ const j=await cmd('add-job',{code:'TEST-JOB',client:'TEST',name:'Test job <script>alert(1)</script>',device:'TEST-FS',owner:'Ana',actor});
+ eq((await cmd('client-health')).find(r=>r.code==='TEST').jobs,1); // duplicate client names must never mix tenants
+ await rejects(()=>cmd('add-job',{code:'BAD',client:'harbour',name:'x',device:'x',owner:'x',actor}),/ambiguous/);
+ await rejects(()=>cmd('set-policy',{job:'TEST-JOB','rpo-hours':0,'restore-days':30,owner:'Ana',evidence:'Plan',actor}),/integer/);
+ await cmd('set-policy',{job:j.id.slice(0,12),'rpo-hours':24,'restore-days':30,owner:'Ana',evidence:'Signed test continuity plan',actor});
+ await cmd('client-review',{client:'TEST',due:'2099-01-01','retention-days':90,evidence:'Access and retention review evidence',owner:'Ana',actor});
+ const time='2026-01-01T00:00:00Z';await cmd('log-result',{job:'TEST-JOB',time,status:'success',evidence:'Operator checked source',actor});
+ eq((await cmd('morning-check',{at:'2026-01-02T00:00:00Z'})).find(r=>r.code==='TEST-JOB').state,'current-success');
+ eq((await cmd('morning-check',{at:'2026-01-02T00:00:01Z'})).find(r=>r.code==='TEST-JOB').state,'stale-results');
+ eq((await cmd('morning-check',{at:'2025-12-31T23:59:59Z'})).find(r=>r.code==='TEST-JOB').state,'no-results');
+ eq((await cmd('log-result',{job:'TEST-JOB',time,status:'success',evidence:'Same observation',actor})).added,false);
+ await rejects(()=>cmd('log-result',{job:'TEST-JOB',time,status:'failure',evidence:'Conflict',actor}),/Conflicting/);
+ await rejects(()=>cmd('log-result',{job:'TEST-JOB',time:'2099-01-01T00:00:00Z',status:'success',evidence:'x',actor}),/future/);
+ await rejects(()=>cmd('log-result',{job:'TEST-JOB',time:'2026-02-30T00:00:00Z',status:'success',evidence:'x',actor}),/date/);
+ await rejects(()=>cmd('log-result',{job:'TEST-JOB',time:'2026-01-01',status:'success',evidence:'x',actor}),/timezone/);
+ await cmd('log-restore',{job:'TEST-JOB',time,outcome:'passed',minutes:12,evidence:'Restored and checked counts',actor});
+ await cmd('log-restore',{job:'TEST-JOB',time:'2026-01-02T00:00:00Z',outcome:'failed',minutes:40,evidence:'Later exercise failed',actor});
+ eq((await cmd('restore-due',{at:'2026-01-03T00:00:00Z'})).find(r=>r.code==='TEST-JOB').restore_state,'failed');
+ await cmd('add-action',{code:'TEST-A',job:'TEST-JOB',name:'Repeat recovery',owner:'Ana',due:'2026-01-05',actor});
+ await rejects(()=>cmd('close-action',{action:'TEST-A',actor}),/evidence/);await cmd('close-action',{action:'TEST-A',evidence:'New successful exercise recorded separately',actor});
+ eq((await cmd('actions')).find(r=>r.code==='TEST-A').status,'done');
+ const fixture=JSON.parse(fs.readFileSync(path.join(REPO_ROOT,'fixtures/backup-radar.json'),'utf8'));
+ const f=file('vendor.json',fixture);const before=(await cmd('jobs')).length;
+ ok((await cmd('import backup-radar',{file:f,source:'test-tenant',actor,'dry-run':true})).dry_run);eq((await cmd('jobs')).length,before);eq((await cmd('imports')).length,0);
+ const multi=structuredClone(fixture);const second=structuredClone(fixture.pages[0]);second.data[0].br_device_id='another-device';second.data[0].last_result=[];second.data[0].history=[];multi.pages[0].total_count=2;multi.pages[0].next_cursor='page-2';second.total_count=2;multi.pages.push(second);
+ eq((await cmd('import backup-radar',{file:file('multi.json',multi),source:'two-pages',actor,'dry-run':true})).records,2);eq((await cmd('jobs')).length,before);
+ const empty={exported_at:fixture.exported_at,pages:[{data:[],total_count:0,next_cursor:null}]};eq((await cmd('import backup-radar',{file:file('empty.json',empty),source:'empty',actor,'dry-run':true})).records,0);
+ const imported=await cmd('import backup-radar',{file:f,source:'test-tenant',actor});eq(imported.new_jobs,1);eq((await cmd('import backup-radar',{file:f,source:'test-tenant',actor})).unchanged,true);
+ const importedJob=(await cmd('jobs')).find(r=>r.code.startsWith('BR-J-'));eq((await cmd('morning-check')).find(r=>r.code===importedJob.code).state,'unconfigured');eq((await cmd('history',{job:importedJob.code})).vendor_daily.length,1);
+ let bad=structuredClone(fixture);bad.pages[0].next_cursor='more';await rejects(()=>cmd('import backup-radar',{file:file('partial.json',bad),source:'test',actor}),/Incomplete/);
+ bad=structuredClone(fixture);bad.pages[0].total_count=2;await rejects(()=>cmd('import backup-radar',{file:file('count.json',bad),source:'test',actor}),/Partial/);
+ bad=structuredClone(fixture);bad.pages[0].data[0].last_result[0].status='made-up';await rejects(()=>cmd('import backup-radar',{file:file('status.json',bad),source:'test',actor}),/Unrecognised/);
+ bad=structuredClone(fixture);bad.pages[0].data[0].last_result[0].status='failure';const newRow=structuredClone(bad.pages[0].data[0]);newRow.br_device_id='new-device';bad.pages[0].data.unshift(newRow);bad.pages[0].total_count=2;
+ await rejects(()=>cmd('import backup-radar',{file:file('conflict.json',bad),source:'test-tenant',actor}),/Conflicting/);eq((await cmd('jobs')).length,before+1);eq((await cmd('imports')).length,1);
+ bad=structuredClone(fixture);bad.pages[0].data.push(structuredClone(bad.pages[0].data[0]));bad.pages[0].total_count=2;await rejects(()=>cmd('import backup-radar',{file:file('dupe.json',bad),source:'test',actor}),/Duplicate/);
+ const exported=await cmd('export',{out:path.join(tmp,'export.json')});eq(exported.counts.jobs,before+1);eq(JSON.parse(fs.readFileSync(exported.file)).imports[0].payload,fixture);await rejects(()=>cmd('export',{out:exported.file}),/EEXIST/);
+ const draft=await cmd('draft-report',{client:'TEST'});ok(draft.draft&&!draft.sent);const html=fs.readFileSync(draft.file,'utf8');ok(html.includes('&lt;script&gt;'));ok(!html.includes('<script>alert'));
+ ok((await cmd('audit')).length>=10);ok((await cmd('help')).commands.includes('import'));
+ await rejects(()=>cmd('nonsense'),/Unknown/);await rejects(()=>cmd('clients',{oops:true}),/Unknown option/);
+ const migration=fs.readFileSync(path.join(REPO_ROOT,'supabase/migrations/0001_assurance.sql'),'utf8');ok(!migration.includes('create extension'));
+ await db.close();
+ for(const script of ['view','docs']){const p=spawnSync(process.execPath,[`scripts/${script}.mjs`],{cwd:REPO_ROOT,env:process.env,encoding:'utf8'});assert.equal(p.status,0,p.stderr);checks++;}
+ ok(fs.existsSync(path.join(tmp,'views','morning.html')));ok(fs.readdirSync(path.join(tmp,'docs-out','backup-review')).length===4);
+ const cli=spawnSync(process.execPath,['scripts/assurance.mjs','clients','--json'],{cwd:REPO_ROOT,env:process.env,encoding:'utf8'});eq(cli.status,0);eq(JSON.parse(cli.stdout).length,4);
+ const ambiguous=spawnSync(process.execPath,['scripts/assurance.mjs','history','--job=archive'],{cwd:REPO_ROOT,env:process.env,encoding:'utf8'});eq(ambiguous.status,1);ok(ambiguous.stderr.includes('ambiguous'));
+ console.log(`PASS: ${checks} assertions; every CLI command, pagination, rollback, policy boundaries, source conflicts, client isolation, audit, exports and escaped documents (${process.platform}, ${process.env.TEST_DATABASE_URL?'postgres':'pglite'})`);
+}catch(e){try{await db.close();}catch{}throw e;}finally{fs.rmSync(tmp,{recursive:true,force:true});}

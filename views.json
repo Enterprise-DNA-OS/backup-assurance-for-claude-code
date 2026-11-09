@@ -1,13 +1,32 @@
 [
   {
-    "name": "week",
-    "title": "This week",
-    "subtitle": "Backup Assurance for Claude Code: what needs attention, rendered by npm run view",
+    "name": "morning",
+    "title": "Morning backup review",
+    "subtitle": "Recorded evidence only. No live collection or alert delivery.",
     "sections": [
       {
-        "title": "Needs attention",
-        "note": "TODO(author): point this at the industry's attention view (overdue, stuck, quiet).",
-        "sql": "select 'replace me' as item, 'TODO(author)' as why"
+        "title": "Backup and restore position",
+        "sql": "select code,client,name,state,last_result,restore_state,owner from v_morning order by code"
+      }
+    ]
+  },
+  {
+    "name": "client-health",
+    "title": "Client backup position",
+    "sections": [
+      {
+        "title": "Clients",
+        "sql": "select * from v_client_health order by code"
+      }
+    ]
+  },
+  {
+    "name": "attention",
+    "title": "Backup follow-up",
+    "sections": [
+      {
+        "title": "Needs review",
+        "sql": "select * from v_attention order by reason,code"
       }
     ]
   }

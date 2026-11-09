@@ -1,5 +1,3 @@
-# Slash commands
+# Operator commands
 
-One file per recurring job. Each command tells Claude Code exactly which CLI command to run and how to present the result, so the operator never re-explains the job.
-
-Add a command every time the same ask comes twice. Frontmatter needs a `description:` line. The body is the brief.
+One command recipe per recurring job. Read CLAUDE.md first. All business actions use scripts/assurance.mjs. customise and new-view extend the same database and renderers. Run `npm run assurance -- help` for options. Do not send notifications or email.
